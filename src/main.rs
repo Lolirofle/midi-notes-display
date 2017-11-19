@@ -8,7 +8,6 @@ use conrod::{color,widget};
 use conrod::widget::triangles::Triangle;
 use conrod::backend::glium::glium::{self,Surface};
 use core::u8;
-use midi::{Event,EventType,MidiEvent,MidiEventType};
 
 mod pair_iter;
 use pair_iter::*;
@@ -77,6 +76,8 @@ impl EventLoop{
 //impl IntoIterator<Item = widget::primitive::shape::triangles::Triangle<<widget::primitive::shape::triangles::MultiColor as widget::primitive::shape::triangles::Style>::Vertex>>
 type NoteTriangle = widget::primitive::shape::triangles::Triangle<<widget::primitive::shape::triangles::MultiColor as widget::primitive::shape::triangles::Style>::Vertex>;
 fn midi_to_note_triangles(midi_data: &midi::Midi) -> Vec<NoteTriangle>{
+	use midi::{Event,EventType,MidiEvent,MidiEventType};
+
 	let color = color::WHITE.to_rgb();
 	let mut time: u32 = 0;
 	let mut notes_on: Vec<Option<u32>> = [None; (u8::MAX as usize)-(u8::MIN as usize)].to_vec(); //TODO: Is this conversion inefficient? The allocation certainly should be.
@@ -145,9 +146,11 @@ fn main(){
 	const FONT_PATH: &'static str = concat!(env!("CARGO_MANIFEST_DIR"),"/test.ttf");
 
 	//MIDI file import
-	let data = include_bytes!("../test.mid");
-	let midi_data = midi::parser::parse_midi(data).unwrap().1;
-	let note_triangles = midi_to_note_triangles(&midi_data);
+	let note_triangles = {
+		let data = include_bytes!("../test.mid");
+		let midi_data = midi::parser::parse_midi(data).unwrap().1;
+		midi_to_note_triangles(&midi_data)
+	};
 
 	//Build window
 	let mut events_loop = glium::glutin::EventsLoop::new();
