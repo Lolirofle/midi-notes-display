@@ -4,13 +4,14 @@ extern crate core;
 extern crate nom_midi as midi;
 #[macro_use] extern crate conrod;
 
-use conrod::{color,widget};
-use conrod::widget::triangles::Triangle;
+use conrod::widget;
 use conrod::backend::glium::glium::{self,Surface};
 use core::u8;
 
+mod filtered_scan_iter;
 mod pair_iter;
-use pair_iter::*;
+
+use filtered_scan_iter::*;
 
 ///In most of the examples the `glutin` crate is used for providing the window context and
 ///events while the `glium` crate is used for displaying `conrod::render::Primitives` to the
@@ -71,65 +72,61 @@ impl EventLoop{
 
 }
 
-//
-//impl IntoIterator<Item = widget::primitive::shape::triangles::Triangle<([f64; 2], conrod::color::Rgba)>>
-//impl IntoIterator<Item = widget::primitive::shape::triangles::Triangle<<widget::primitive::shape::triangles::MultiColor as widget::primitive::shape::triangles::Style>::Vertex>>
-type NoteTriangle = widget::primitive::shape::triangles::Triangle<<widget::primitive::shape::triangles::MultiColor as widget::primitive::shape::triangles::Style>::Vertex>;
-fn midi_to_note_triangles(midi_data: &midi::Midi) -> Vec<NoteTriangle>{
-	use midi::{Event,EventType,MidiEvent,MidiEventType};
+#[derive(Copy,Clone,Debug,PartialEq)]
+struct Tone{
+	pub note      : midi::note::Note,
+	pub start_time: u32,
+	pub end_time  : u32,
+	pub atk_vel   : u8,
+	pub rel_vel   : u8,
+}
+fn midi_to_tones(midi_data: &midi::Midi) -> Vec<Tone>{
+	use midi::{MidiEvent,MidiEventType};
 
-	let color = color::WHITE.to_rgb();
-	let mut time: u32 = 0;
-	let mut notes_on: Vec<Option<u32>> = [None; (u8::MAX as usize)-(u8::MIN as usize)].to_vec(); //TODO: Is this conversion inefficient? The allocation certainly should be.
-
-	(midi_data
+	midi_data
 		.tracks
 		.iter()
-		.flat_map(|track| &track.events)
-		.flat_map(|&Event{delta_time,ref event,..}|{
-			time+= delta_time;
+		.flat_map((|track| &track.events)/* as fn(&midi::Track) -> &Vec<midi::Event>*/)
+		.filtered_scan(
+			(0 , [None; (u8::MAX as usize)-(u8::MIN as usize)].to_vec()), //TODO: Is this conversion inefficient? The allocation certainly should be.
+			(|&mut (ref mut time,ref mut notes_on) , &midi::Event{delta_time,ref event,..}|{
+				*time+= delta_time;
 
-			if let &EventType::Midi(MidiEvent{event: midi_event_type,..}) = event{
-				match midi_event_type{
-					MidiEventType::NoteOn (note,_) => {
-						let note_on = &mut notes_on[Into::<u8>::into(note) as usize];
+				if let &midi::EventType::Midi(MidiEvent{event: midi_event_type,..}) = event{
+					match midi_event_type{
+						MidiEventType::NoteOn(note,atk_vel) => {
+							let note_on = &mut notes_on[Into::<u8>::into(note) as usize];
 
-						if note_on.is_none(){
-							*note_on = Some(time);
-						}
+							if note_on.is_none(){
+								*note_on = Some((*time,atk_vel));
+							}
 
-						PairIter::from([])
-					},
-					MidiEventType::NoteOff(note,_) => {
-						let note_on = &mut notes_on[Into::<u8>::into(note) as usize];
+							None
+						},
+						MidiEventType::NoteOff(note,rel_vel) => {
+							let note_on = &mut notes_on[Into::<u8>::into(note) as usize];
 
-						const NOTE_HEIGHT: f64 = 4.0;
-
-						if let &mut Some(start_time) = note_on{
-							*note_on = None;
-
-							let (l,r,b,t) = (
-								start_time as f64,
-								time as f64,
-								((Into::<u8>::into(note)+1) as f64)*NOTE_HEIGHT,
-								(Into::<u8>::into(note) as f64)*NOTE_HEIGHT
-							);
-
-							PairIter::from([
-								Triangle([([l,b],color) , ([l,t],color) , ([r,t],color)]),
-								Triangle([([r,t],color) , ([r,b],color) , ([l,b],color)]),
-							])
-						}else{
-							PairIter::from([])
-						}
-					},
-					_ => PairIter::from([])
+							if let &mut Some((start_time,atk_vel)) = note_on{
+								*note_on = None;
+								Some(Tone{
+									start_time: start_time,
+									end_time  : *time,
+									note      : note,
+									atk_vel   : atk_vel,
+									rel_vel   : rel_vel,
+								})
+							}else{
+								None
+							}
+						},
+						_ => None
+					}
+				}else{
+					None
 				}
-			}else{
-				PairIter::from([])
-			}
-		})
-	).collect()
+			})// as fn(&mut (u32,Vec<Option<(u32,u8)>>),&midi::Event) -> Option<_>
+		)
+		.collect()
 }
 
 widget_ids!(struct Ids{
@@ -146,10 +143,10 @@ fn main(){
 	const FONT_PATH: &'static str = concat!(env!("CARGO_MANIFEST_DIR"),"/test.ttf");
 
 	//MIDI file import
-	let note_triangles = {
+	let tones = {
 		let data = include_bytes!("../test.mid");
 		let midi_data = midi::parser::parse_midi(data).unwrap().1;
-		midi_to_note_triangles(&midi_data)
+		midi_to_tones(&midi_data)
 	};
 
 	//Build window
@@ -178,6 +175,7 @@ fn main(){
 	let image_map = conrod::image::Map::<glium::texture::Texture2d>::new();
 
 	//Poll events from the window.
+	let mut tone_widget_ids = Vec::new();
 	let mut event_loop = EventLoop::new();
 	'main: loop{
 		//Handle all events
@@ -205,8 +203,8 @@ fn main(){
 			}
 		}
 
-		//Instantiate widgets
-		set_ui(&mut ui.set_widgets(),&ids,&note_triangles);
+		//Initiate widgets
+		set_ui(&mut ui.set_widgets(),&ids,&tones,&mut tone_widget_ids,[1.0,16.0]);
 
 		//Render GUI when something has changed
 		if let Some(primitives) = ui.draw_if_changed(){
@@ -220,34 +218,44 @@ fn main(){
 }
 
 //Set the widgets
-fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,note_triangles: &Vec<NoteTriangle>){
-	use conrod::{color, widget, Colorable, Positionable, Sizeable, Widget};
+fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,tones: &Vec<Tone>,tone_widget_ids: &mut Vec<widget::Id>,tone_widget_size: [f64; 2]){
+	use conrod::{color,widget,Color,Colorable,Positionable,Sizeable,Widget};
+	use conrod::position::{Position,Scalar};
 
 	//Canvas
 	widget::Canvas::new()
-		.scroll_kids_horizontally()
-		.scroll_kids_vertically()
+		.scroll_kids()
 		.color(color::DARK_CHARCOAL)
 		.set(ids.canvas,ui);
 
-	//Note bars
-	widget::Triangles{
-		triangles: note_triangles.iter().cloned(),
-		style: widget::primitive::shape::triangles::MultiColor,
-		maybe_shift_to_centre_from: None,//Some([1000.0,0.0]),
-		common: widget::CommonBuilder{
-			maybe_x_scroll: Some(widget::scroll::Scroll::new()),
-			maybe_y_scroll: Some(widget::scroll::Scroll::new()),
-			..widget::CommonBuilder::default()
+	//Tone bars
+	if tone_widget_ids.len() < tones.len(){
+		tone_widget_ids.reserve(tones.len());
+		for _ in tone_widget_ids.len()..tones.len(){
+			tone_widget_ids.push(ui.widget_id_generator().next());
 		}
 	}
-		.wh_of(ids.canvas)
-		.mid_top_of(ids.canvas)
-		.set(ids.triangles,ui);
+
+	for (tone,id) in tones.iter().zip(tone_widget_ids.iter().cloned()){
+		widget::Rectangle::fill_with([((tone.end_time as Scalar)-(tone.start_time as Scalar))*tone_widget_size[0] , tone_widget_size[1]] ,Color::Rgba(1.0,1.0,1.0,0.5))
+			.parent(ids.canvas)
+			.place_on_kid_area(true)
+			.xy([
+				(tone.start_time as Scalar) * tone_widget_size[0],
+				(Into::<u8>::into(tone.note) as f64) * tone_widget_size[1],
+			])
+			.set(id,ui);
+	}
 
 	//Horizontal scrollbar
-	widget::Scrollbar::x_axis(ids.canvas).auto_hide(false).set(ids.triangles_scrollbar_x,ui);
+	widget::Scrollbar::x_axis(ids.canvas)
+		.thickness(20.0)
+		.auto_hide(false)
+		.set(ids.triangles_scrollbar_x,ui);
 
 	//Vertical scrollbar
-	widget::Scrollbar::y_axis(ids.canvas).auto_hide(false).set(ids.triangles_scrollbar_y,ui);
+	widget::Scrollbar::y_axis(ids.canvas)
+		.thickness(20.0)
+		.auto_hide(false)
+		.set(ids.triangles_scrollbar_y,ui);
 }
