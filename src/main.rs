@@ -15,6 +15,21 @@ mod pair_iter;
 
 use midi_ext::*;
 
+//TODO: Drag with mouse middle click to move view.
+//TODO: Drag with CTRL+ left click to move view.
+//TODO: Flip the notes vertically because that direction is more commonly seen in other softwares.
+//TODO: Draw note names to the left.
+//TODO: Have border/box radius/margin to avoid mistaking multiple adjecent notes for a single one.
+//TODO: Keyboard controls.
+//TODO: Command line flags (e.g. for specifying font or reading from stdin).
+//TODO: Playback with soundfont or a single sound file.
+//TODO: Draw times on the bottom/top.
+//TODO: Draw vertical lines separating beats, bars and stuff like that.
+//TODO: Settings toggleing of tracks and channels.
+//TODO: Open file by file dialog in GUI.
+//TODO: Open file by drag and drop.
+//TODO: Hovering note gives note info (like velocity, time and stuff). Maybe also a info box.
+
 ///In most of the examples the `glutin` crate is used for providing the window context and
 ///events while the `glium` crate is used for displaying `conrod::render::Primitives` to the
 ///screen.
