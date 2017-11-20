@@ -7,3 +7,4 @@ authors = ["Lolirofle <lolipopple@hotmail.com>"]
 conrod      = {version = "0.56" , features = ["glium","winit"]}
 font-loader = {version = "0.4"}
 nom-midi    = {version = "0.2"}
+rusttype    = {version = "0.2"}

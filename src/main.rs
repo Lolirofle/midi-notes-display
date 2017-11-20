@@ -1,7 +1,9 @@
 #![feature(slice_patterns,range_contains)]
 
 extern crate core;
+extern crate font_loader;
 extern crate nom_midi as midi;
+extern crate rusttype;
 #[macro_use] extern crate conrod;
 
 use conrod::widget;
@@ -98,7 +100,6 @@ fn main(){
 	//Constants
 	const INITIAL_WIDTH: u32 = 800;
 	const INITIAL_HEIGHT: u32 = 600;
-	const FONT_PATH: &'static str = concat!(env!("CARGO_MANIFEST_DIR"),"/test.ttf");
 
 	//MIDI file import
 	let midi_data = {
@@ -128,7 +129,16 @@ fn main(){
 	let ids = Ids::new(ui.widget_id_generator());
 
 	//Add a font to the UI's `font::Map`
-	ui.fonts.insert_from_file(FONT_PATH).unwrap();
+	ui.fonts.insert(
+		rusttype::FontCollection::from_bytes(
+			font_loader::system_fonts::get(&font_loader::system_fonts::FontPropertyBuilder::new().family("DejaVu Sans").build())
+			.or_else(|| font_loader::system_fonts::get(&font_loader::system_fonts::FontPropertyBuilder::new().family("Tahoma").build()))
+			.or_else(|| font_loader::system_fonts::get(&font_loader::system_fonts::FontPropertyBuilder::new().family("sans-serif").build()))
+			.unwrap().0
+		)
+			.into_font()
+			.unwrap()
+	);
 
 	//Used for converting `conrod::render::Primitives` into `Command`s that can be used for drawing to the glium `Surface`
 	let mut renderer = conrod::backend::glium::Renderer::new(&display).unwrap();
