@@ -74,10 +74,16 @@ impl EventLoop{
 
 widget_ids!(struct Ids{
 	canvas,
+	tones_wrapper_canvas,
 	tones_canvas,
 	tones_grid,
 	tones_scrollbar_x,
 	tones_scrollbar_y,
+	settings_canvas,
+	settings_barwidth_slider,
+	settings_barheight_slider,
+	setting1_wrapper_canvas,
+	setting2_wrapper_canvas,
 });
 
 struct Song{
@@ -126,6 +132,7 @@ fn main(){
 
 	//Poll events from the window.
 	let mut tone_widget_ids = Vec::new();
+	let mut tone_widget_size = [1.0,16.0];
 	let mut event_loop = EventLoop::new();
 	'main: loop{
 		//Handle all events
@@ -154,7 +161,7 @@ fn main(){
 		}
 
 		//Initiate widgets
-		set_ui(&mut ui.set_widgets(),&ids,&song,&mut tone_widget_ids,[1.0,16.0]);
+		set_ui(&mut ui.set_widgets(),&ids,&song,&mut tone_widget_ids,&mut tone_widget_size);
 
 		//Render GUI when something has changed
 		if let Some(primitives) = ui.draw_if_changed(){
@@ -168,8 +175,8 @@ fn main(){
 }
 
 //Set the widgets
-fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,song: &Song,tone_widget_ids: &mut Vec<[widget::Id; 2]>,tone_widget_size: [f64; 2]){
-	use conrod::{color,widget,Color,Colorable,Positionable,Sizeable,Widget};
+fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,song: &Song,tone_widget_ids: &mut Vec<[widget::Id; 2]>,tone_widget_size: &mut [f64; 2]){
+	use conrod::{color,widget,Borderable,Color,Colorable,Labelable,Positionable,Sizeable,Widget};
 	use conrod::position::Scalar;
 	use conrod::widget::grid;
 	use core::iter;
@@ -177,20 +184,40 @@ fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,song: &Song,tone_widget_ids: &mut Ve
 	//Canvas widget
 	//Contains everything.
 	widget::Canvas::new()
-		.scroll_kids()
-		.color(color::DARK_CHARCOAL)
+		.flow_down(&[
+			//Tones canvas wrapper widget
+			(ids.tones_wrapper_canvas , widget::Canvas::new()
+				.scroll_kids()
+				.color(color::DARK_CHARCOAL)
+			),
+
+			//Tones canvas wrapper widget
+			(ids.settings_canvas , widget::Canvas::new()
+				.color(color::DARK_GRAY)
+				.length(96.0)
+				.border(6.0)
+				.border_color(Color::Rgba(0.3 , 0.3 , 0.3 , 1.0))
+				.flow_right(&[
+					(ids.setting1_wrapper_canvas , widget::Canvas::new().color(color::TRANSPARENT)),
+					(ids.setting2_wrapper_canvas , widget::Canvas::new().color(color::TRANSPARENT)),
+				])
+			),
+		])
+		.color(color::BLACK)
 		.set(ids.canvas,ui);
 
+
 	//Tones canvas widget
-	//Contains tones, and have a fixed size based on the song duration and bar heights so that scrolling in canvas widget works.
+	//Contains tones, and have a fixed size based on the song duration and bar heights so that scrolling in tones_wrapper_canvas widget works.
 	widget::Canvas::new()
-		.parent(ids.canvas)
+		.parent(ids.tones_wrapper_canvas)
 		.place_on_kid_area(true)
 		.top_left()
-		.color(Color::Rgba(0.0,0.0,0.0,0.0))
+		.color(color::TRANSPARENT)
+		.pad(16.0)
 		.wh([
 			(song.duration as Scalar) * tone_widget_size[0],
-			(NOTES as Scalar) * tone_widget_size[1],
+			(NOTES as Scalar)         * tone_widget_size[1],
 		])
 		.set(ids.tones_canvas,ui);
 
@@ -209,7 +236,7 @@ fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,song: &Song,tone_widget_ids: &mut Ve
 	//If `rect_of` and `wh_of` returns None, then it is difficult to do many of the things here (The most important being hiding invisible tone bars).
 	if let (Some(view_rect),Some([view_w,view_h])) = (ui.rect_of(ids.tones_canvas) , ui.wh_of(ids.canvas)){
 		let view_x = -view_rect.x.start - view_w/2.0;
-		let view_y = view_rect.y.end - view_h/2.0;
+		let view_y =  view_rect.y.end   - view_h/2.0;
 
 		//Notes grid
 		widget::Grid::new(
@@ -219,7 +246,6 @@ fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,song: &Song,tone_widget_ids: &mut Ve
 			view_rect.y.end,
 			iter::once(grid::Axis::Y(grid::Lines::step(tone_widget_size[1]).thickness(1.0).color(Color::Rgba(0.5,0.5,0.5,0.1))))
 		)
-			//.y_offset(view_y % 16.0)
 			.parent(ids.tones_canvas)
 			.place_on_kid_area(true)
 			.top_left_of(ids.tones_canvas)
@@ -246,7 +272,7 @@ fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,song: &Song,tone_widget_ids: &mut Ve
 				.set(bar_id,ui);
 
 			//Bar note text widgets
-			if tone_widget_size[1] >= 10.0{
+			if w >= 20.0 && h >= 10.0{
 				widget::Text::new(note_name(tone.note))
 					.parent(bar_id)
 					.graphics_for(bar_id)
@@ -259,15 +285,45 @@ fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,song: &Song,tone_widget_ids: &mut Ve
 		}
 	}
 
-	//Horizontal scrollbar
-	widget::Scrollbar::x_axis(ids.canvas)
+	//Tones horizontal scrollbar
+	widget::Scrollbar::x_axis(ids.tones_wrapper_canvas)
 		.thickness(20.0)
 		.auto_hide(false)
 		.set(ids.tones_scrollbar_x,ui);
 
-	//Vertical scrollbar
-	widget::Scrollbar::y_axis(ids.canvas)
+	//Tones vertical scrollbar
+	widget::Scrollbar::y_axis(ids.tones_wrapper_canvas)
 		.thickness(20.0)
 		.auto_hide(false)
 		.set(ids.tones_scrollbar_y,ui);
+
+	//Settings bar width slider
+	if let Some(value) = widget::Slider::new(tone_widget_size[0] , 0.01 , 8.0)
+		.parent(ids.setting1_wrapper_canvas)
+		.place_on_kid_area(true)
+		.middle_of(ids.setting1_wrapper_canvas)
+		.wh([140.0 , 16.0])
+		.label("Bar width")
+		.label_font_size(9)
+		.skew(5.0)
+		.enabled(true)
+		.set(ids.settings_barwidth_slider,ui)
+	{
+		tone_widget_size[0] = value;
+	}
+
+	//Settings bar height slider
+	if let Some(value) = widget::Slider::new(tone_widget_size[1] , 4.0 , 64.0)
+		.parent(ids.setting2_wrapper_canvas)
+		.place_on_kid_area(true)
+		.middle_of(ids.setting2_wrapper_canvas)
+		.wh([140.0 , 16.0])
+		.label("Bar height")
+		.label_font_size(9)
+		.skew(5.0)
+		.enabled(true)
+		.set(ids.settings_barheight_slider,ui)
+	{
+		tone_widget_size[1] = value;
+	}
 }
