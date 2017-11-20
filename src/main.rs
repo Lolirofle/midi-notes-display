@@ -92,14 +92,21 @@ struct Song{
 }
 
 fn main(){
+	use std::{env,fs};
+	use std::io::Read;
+
 	//Constants
 	const INITIAL_WIDTH: u32 = 800;
 	const INITIAL_HEIGHT: u32 = 600;
 	const FONT_PATH: &'static str = concat!(env!("CARGO_MANIFEST_DIR"),"/test.ttf");
 
 	//MIDI file import
-	let midi_file_contents = include_bytes!("../test.mid");
-	let midi_data = midi::parser::parse_midi(midi_file_contents).unwrap().1;
+	let midi_data = {
+		let mut midi_file_contents = Vec::new();
+		let mut midi_file = fs::File::open(env::args().nth(1).expect("MIDI file path is unspecified. Expected a 1st command line argument.")).expect("Unable to open file specified from 1st command line argument.");
+		midi_file.read_to_end(&mut midi_file_contents).expect("Unable to read file specified from 1st command line argument.");
+		midi::parser::parse_midi(midi_file_contents.as_slice()).to_result().expect("Unable to parse file specified from 1st command line argument as MIDI file.")
+	};
 	let song = Song{
 		tones   : midi_to_tones(&midi_data),
 		duration: midi_duration(&midi_data),
@@ -112,7 +119,7 @@ fn main(){
 		.with_dimensions(INITIAL_WIDTH,INITIAL_HEIGHT);
 	let context = glium::glutin::ContextBuilder::new()
 		.with_vsync(true);
-	let display = glium::Display::new(window,context,&events_loop).unwrap();
+	let display = glium::Display::new(window,context,&events_loop).expect("Unable to open/create display/window");
 
 	//Construct UI object
 	let mut ui = conrod::UiBuilder::new([INITIAL_WIDTH as f64,INITIAL_HEIGHT as f64]).build();
