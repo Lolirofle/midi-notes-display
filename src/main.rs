@@ -1,4 +1,4 @@
-#![feature(conservative_impl_trait)]
+#![feature(slice_patterns,range_contains)]
 
 extern crate core;
 extern crate nom_midi as midi;
@@ -6,12 +6,12 @@ extern crate nom_midi as midi;
 
 use conrod::widget;
 use conrod::backend::glium::glium::{self,Surface};
-use core::u8;
 
 mod filtered_scan_iter;
+mod midi_ext;
 mod pair_iter;
 
-use filtered_scan_iter::*;
+use midi_ext::*;
 
 ///In most of the examples the `glutin` crate is used for providing the window context and
 ///events while the `glium` crate is used for displaying `conrod::render::Primitives` to the
@@ -72,69 +72,18 @@ impl EventLoop{
 
 }
 
-#[derive(Copy,Clone,Debug,PartialEq)]
-struct Tone{
-	pub note      : midi::note::Note,
-	pub start_time: u32,
-	pub end_time  : u32,
-	pub atk_vel   : u8,
-	pub rel_vel   : u8,
-}
-fn midi_to_tones(midi_data: &midi::Midi) -> Vec<Tone>{
-	use midi::{MidiEvent,MidiEventType};
-
-	midi_data
-		.tracks
-		.iter()
-		.flat_map((|track| &track.events)/* as fn(&midi::Track) -> &Vec<midi::Event>*/)
-		.filtered_scan(
-			(0 , [None; (u8::MAX as usize)-(u8::MIN as usize)].to_vec()), //TODO: Is this conversion inefficient? The allocation certainly should be.
-			(|&mut (ref mut time,ref mut notes_on) , &midi::Event{delta_time,ref event,..}|{
-				*time+= delta_time;
-
-				if let &midi::EventType::Midi(MidiEvent{event: midi_event_type,..}) = event{
-					match midi_event_type{
-						MidiEventType::NoteOn(note,atk_vel) => {
-							let note_on = &mut notes_on[Into::<u8>::into(note) as usize];
-
-							if note_on.is_none(){
-								*note_on = Some((*time,atk_vel));
-							}
-
-							None
-						},
-						MidiEventType::NoteOff(note,rel_vel) => {
-							let note_on = &mut notes_on[Into::<u8>::into(note) as usize];
-
-							if let &mut Some((start_time,atk_vel)) = note_on{
-								*note_on = None;
-								Some(Tone{
-									start_time: start_time,
-									end_time  : *time,
-									note      : note,
-									atk_vel   : atk_vel,
-									rel_vel   : rel_vel,
-								})
-							}else{
-								None
-							}
-						},
-						_ => None
-					}
-				}else{
-					None
-				}
-			})// as fn(&mut (u32,Vec<Option<(u32,u8)>>),&midi::Event) -> Option<_>
-		)
-		.collect()
-}
-
 widget_ids!(struct Ids{
 	canvas,
-	triangles,
-	triangles_scrollbar_x,
-	triangles_scrollbar_y,
+	tones_canvas,
+	tones_grid,
+	tones_scrollbar_x,
+	tones_scrollbar_y,
 });
+
+struct Song{
+	tones: Vec<Tone>,
+	duration: u32,
+}
 
 fn main(){
 	//Constants
@@ -143,10 +92,11 @@ fn main(){
 	const FONT_PATH: &'static str = concat!(env!("CARGO_MANIFEST_DIR"),"/test.ttf");
 
 	//MIDI file import
-	let tones = {
-		let data = include_bytes!("../test.mid");
-		let midi_data = midi::parser::parse_midi(data).unwrap().1;
-		midi_to_tones(&midi_data)
+	let midi_file_contents = include_bytes!("../test.mid");
+	let midi_data = midi::parser::parse_midi(midi_file_contents).unwrap().1;
+	let song = Song{
+		tones   : midi_to_tones(&midi_data),
+		duration: midi_duration(&midi_data),
 	};
 
 	//Build window
@@ -204,7 +154,7 @@ fn main(){
 		}
 
 		//Initiate widgets
-		set_ui(&mut ui.set_widgets(),&ids,&tones,&mut tone_widget_ids,[1.0,16.0]);
+		set_ui(&mut ui.set_widgets(),&ids,&song,&mut tone_widget_ids,[1.0,16.0]);
 
 		//Render GUI when something has changed
 		if let Some(primitives) = ui.draw_if_changed(){
@@ -218,44 +168,106 @@ fn main(){
 }
 
 //Set the widgets
-fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,tones: &Vec<Tone>,tone_widget_ids: &mut Vec<widget::Id>,tone_widget_size: [f64; 2]){
+fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,song: &Song,tone_widget_ids: &mut Vec<[widget::Id; 2]>,tone_widget_size: [f64; 2]){
 	use conrod::{color,widget,Color,Colorable,Positionable,Sizeable,Widget};
-	use conrod::position::{Position,Scalar};
+	use conrod::position::Scalar;
+	use conrod::widget::grid;
+	use core::iter;
 
-	//Canvas
+	//Canvas widget
+	//Contains everything.
 	widget::Canvas::new()
 		.scroll_kids()
 		.color(color::DARK_CHARCOAL)
 		.set(ids.canvas,ui);
 
-	//Tone bars
-	if tone_widget_ids.len() < tones.len(){
-		tone_widget_ids.reserve(tones.len());
-		for _ in tone_widget_ids.len()..tones.len(){
-			tone_widget_ids.push(ui.widget_id_generator().next());
+	//Tones canvas widget
+	//Contains tones, and have a fixed size based on the song duration and bar heights so that scrolling in canvas widget works.
+	widget::Canvas::new()
+		.parent(ids.canvas)
+		.place_on_kid_area(true)
+		.top_left()
+		.color(Color::Rgba(0.0,0.0,0.0,0.0))
+		.wh([
+			(song.duration as Scalar) * tone_widget_size[0],
+			(NOTES as Scalar) * tone_widget_size[1],
+		])
+		.set(ids.tones_canvas,ui);
+
+	//Generate more tone bar widget ids if not enough
+	if tone_widget_ids.len() < song.tones.len(){
+		tone_widget_ids.reserve(song.tones.len());
+		for _ in tone_widget_ids.len()..song.tones.len(){
+			tone_widget_ids.push([
+				ui.widget_id_generator().next(),
+				ui.widget_id_generator().next(),
+			]);
 		}
 	}
 
-	for (tone,id) in tones.iter().zip(tone_widget_ids.iter().cloned()){
-		widget::Rectangle::fill_with([((tone.end_time as Scalar)-(tone.start_time as Scalar))*tone_widget_size[0] , tone_widget_size[1]] ,Color::Rgba(1.0,1.0,1.0,0.5))
-			.parent(ids.canvas)
+	//Tone bar widgets
+	//If `rect_of` and `wh_of` returns None, then it is difficult to do many of the things here (The most important being hiding invisible tone bars).
+	if let (Some(view_rect),Some([view_w,view_h])) = (ui.rect_of(ids.tones_canvas) , ui.wh_of(ids.canvas)){
+		let view_x = -view_rect.x.start - view_w/2.0;
+		let view_y = view_rect.y.end - view_h/2.0;
+
+		//Notes grid
+		widget::Grid::new(
+			view_rect.x.start,
+			view_rect.x.end,
+			view_rect.y.start,
+			view_rect.y.end,
+			iter::once(grid::Axis::Y(grid::Lines::step(tone_widget_size[1]).thickness(1.0).color(Color::Rgba(0.5,0.5,0.5,0.1))))
+		)
+			//.y_offset(view_y % 16.0)
+			.parent(ids.tones_canvas)
 			.place_on_kid_area(true)
-			.xy([
-				(tone.start_time as Scalar) * tone_widget_size[0],
-				(Into::<u8>::into(tone.note) as f64) * tone_widget_size[1],
-			])
-			.set(id,ui);
+			.top_left_of(ids.tones_canvas)
+			.set(ids.tones_grid,ui);
+
+		for (tone,[bar_id,text_id]) in song.tones.iter().zip(tone_widget_ids.iter().cloned()){
+			let x = (tone.start_time as Scalar) * tone_widget_size[0];
+			let y = (Into::<u8>::into(tone.note) as f64) * tone_widget_size[1];
+			let w = ((tone.end_time as Scalar)-(tone.start_time as Scalar)) * tone_widget_size[0];
+			let h = tone_widget_size[1];
+
+			//Hide invisible tone bars (those that are not inside the scrolled view)
+			if x+w < view_x{continue} //Skip to the left.
+			if x > view_x+view_w{break} //Skip to the right. Break is okay because `song.tones` is guaranteed to be sorted.
+
+			if y+h < view_y{continue} //Skip above.
+			if y > view_y+view_h{continue} //Skip below.
+
+			//Bars widgets
+			widget::Rectangle::fill_with([w,h],Color::Rgba(1.0,1.0,1.0,0.5))
+				.parent(ids.tones_canvas)
+				.place_on_kid_area(true)
+				.top_left_with_margins_on(ids.tones_canvas,y,x)
+				.set(bar_id,ui);
+
+			//Bar note text widgets
+			if tone_widget_size[1] >= 10.0{
+				widget::Text::new(note_name(tone.note))
+					.parent(bar_id)
+					.graphics_for(bar_id)
+					.font_size((tone_widget_size[1]*0.75) as u32)
+					.color(color::BLACK)
+					.middle_of(bar_id)
+					.center_justify()
+					.set(text_id,ui);
+			}
+		}
 	}
 
 	//Horizontal scrollbar
 	widget::Scrollbar::x_axis(ids.canvas)
 		.thickness(20.0)
 		.auto_hide(false)
-		.set(ids.triangles_scrollbar_x,ui);
+		.set(ids.tones_scrollbar_x,ui);
 
 	//Vertical scrollbar
 	widget::Scrollbar::y_axis(ids.canvas)
 		.thickness(20.0)
 		.auto_hide(false)
-		.set(ids.triangles_scrollbar_y,ui);
+		.set(ids.tones_scrollbar_y,ui);
 }
