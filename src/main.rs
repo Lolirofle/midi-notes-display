@@ -1,4 +1,4 @@
-#![feature(slice_patterns,range_contains)]
+#![feature(slice_patterns,type_alias_enum_variants)]
 
 extern crate core;
 extern crate font_loader;
@@ -29,6 +29,7 @@ use midi_ext::*;
 //TODO: Open file by file dialog in GUI.
 //TODO: Open file by drag and drop.
 //TODO: Hovering note gives note info (like velocity, time and stuff). Maybe also a info box.
+//TODO: http://www.music.mcgill.ca/~ich/classes/mumt306/StandardMIDIfileformat.html#BM1_
 
 ///In most of the examples the `glutin` crate is used for providing the window context and
 ///events while the `glium` crate is used for displaying `conrod::render::Primitives` to the
@@ -104,7 +105,7 @@ widget_ids!(struct Ids{
 });
 
 struct Song{
-	tones: Vec<Tone>,
+	tracks: Vec<Vec<Tone>>,
 	duration: u32,
 }
 
@@ -117,14 +118,14 @@ fn main(){
 	const INITIAL_HEIGHT: u32 = 600;
 
 	//MIDI file import
+	let mut midi_file_contents = Vec::new();
 	let midi_data = {
-		let mut midi_file_contents = Vec::new();
 		let mut midi_file = fs::File::open(env::args().nth(1).expect("MIDI file path is unspecified. Expected a 1st command line argument.")).expect("Unable to open file specified from 1st command line argument.");
 		midi_file.read_to_end(&mut midi_file_contents).expect("Unable to read file specified from 1st command line argument.");
-		midi::parser::parse_midi(midi_file_contents.as_slice()).to_result().expect("Unable to parse file specified from 1st command line argument as MIDI file.")
+		midi::parser::parse_smf(midi_file_contents.as_slice()).expect("Unable to parse file specified from 1st command line argument as MIDI file.").1
 	};
 	let song = Song{
-		tones   : midi_to_tones(&midi_data),
+		tracks  : midi_data.tracks.iter().map(midi_track_to_tones).collect(),
 		duration: midi_duration(&midi_data),
 	};
 
@@ -132,7 +133,7 @@ fn main(){
 	let mut events_loop = glium::glutin::EventsLoop::new();
 	let window = glium::glutin::WindowBuilder::new()
 		.with_title("MIDI Notes Display")
-		.with_dimensions(INITIAL_WIDTH,INITIAL_HEIGHT);
+		.with_dimensions(glium::glutin::dpi::LogicalSize::new(INITIAL_WIDTH as f64,INITIAL_HEIGHT as f64));
 	let context = glium::glutin::ContextBuilder::new()
 		.with_vsync(true);
 	let display = glium::Display::new(window,context,&events_loop).expect("Unable to open/create display/window");
@@ -151,7 +152,8 @@ fn main(){
 			.or_else(|| font_loader::system_fonts::get(&font_loader::system_fonts::FontPropertyBuilder::new().family("sans-serif").build()))
 			.unwrap().0
 		)
-			.into_font()
+			.unwrap()
+			.font_at(0)
 			.unwrap()
 	);
 
@@ -178,7 +180,7 @@ fn main(){
 			match event{
 				glium::glutin::Event::WindowEvent{event,..} => match event{
 					//Closing application
-					glium::glutin::WindowEvent::Closed |
+					glium::glutin::WindowEvent::CloseRequested |
 					glium::glutin::WindowEvent::KeyboardInput {
 						input: glium::glutin::KeyboardInput {
 							virtual_keycode: Some(glium::glutin::VirtualKeyCode::Escape),
@@ -208,7 +210,7 @@ fn main(){
 
 //Set the widgets
 fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,song: &Song,tone_widget_ids: &mut Vec<[widget::Id; 2]>,tone_widget_size: &mut [f64; 2]){
-	use conrod::{color,widget,Borderable,Color,Colorable,Labelable,Positionable,Sizeable,Widget};
+	use conrod::{color,Borderable,Color,Colorable,Labelable,Positionable,Sizeable,Widget};
 	use conrod::position::Scalar;
 	use conrod::widget::grid;
 	use core::iter;
@@ -254,13 +256,15 @@ fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,song: &Song,tone_widget_ids: &mut Ve
 		.set(ids.tones_canvas,ui);
 
 	//Generate more tone bar widget ids if not enough
-	if tone_widget_ids.len() < song.tones.len(){
-		tone_widget_ids.reserve(song.tones.len());
-		for _ in tone_widget_ids.len()..song.tones.len(){
-			tone_widget_ids.push([
-				ui.widget_id_generator().next(),
-				ui.widget_id_generator().next(),
-			]);
+	for tones in &song.tracks{
+		if tone_widget_ids.len() < tones.len(){
+			tone_widget_ids.reserve(tones.len());
+			for _ in tone_widget_ids.len()..tones.len(){
+				tone_widget_ids.push([
+					ui.widget_id_generator().next(),
+					ui.widget_id_generator().next(),
+				]);
+			}
 		}
 	}
 
@@ -283,36 +287,38 @@ fn set_ui(ui: &mut conrod::UiCell,ids: &Ids,song: &Song,tone_widget_ids: &mut Ve
 			.top_left_of(ids.tones_canvas)
 			.set(ids.tones_grid,ui);
 
-		for (tone,[bar_id,text_id]) in song.tones.iter().zip(tone_widget_ids.iter().cloned()){
-			let x = (tone.start_time as Scalar) * tone_widget_size[0];
-			let y = (Into::<u8>::into(tone.note) as f64) * tone_widget_size[1];
-			let w = ((tone.end_time as Scalar)-(tone.start_time as Scalar)) * tone_widget_size[0];
-			let h = tone_widget_size[1];
+		for tones in &song.tracks{
+			for (tone,[bar_id,text_id]) in tones.iter().zip(tone_widget_ids.iter().cloned()){
+				let x = (tone.start_time as Scalar) * tone_widget_size[0];
+				let y = (Into::<u8>::into(tone.note) as f64) * tone_widget_size[1];
+				let w = ((tone.end_time as Scalar)-(tone.start_time as Scalar)) * tone_widget_size[0];
+				let h = tone_widget_size[1];
 
-			//Hide invisible tone bars (those that are not inside the scrolled view)
-			if x+w < view_x{continue} //Skip to the left.
-			if x > view_x+view_w{break} //Skip to the right. Break is okay because `song.tones` is guaranteed to be sorted.
+				//Hide invisible tone bars (those that are not inside the scrolled view)
+				if x+w < view_x{continue} //Skip to the left.
+				if x > view_x+view_w{break} //Skip to the right. Break is okay because `tones` is guaranteed to be sorted.
 
-			if y+h < view_y{continue} //Skip above.
-			if y > view_y+view_h{continue} //Skip below.
+				if y+h < view_y{continue} //Skip above.
+				if y > view_y+view_h{continue} //Skip below.
 
-			//Bars widgets
-			widget::Rectangle::fill_with([w,h],Color::Rgba(1.0,1.0,1.0,0.5))
-				.parent(ids.tones_canvas)
-				.place_on_kid_area(true)
-				.top_left_with_margins_on(ids.tones_canvas,y,x)
-				.set(bar_id,ui);
+				//Bars widgets
+				widget::Rectangle::fill_with([w,h],Color::Rgba(1.0,1.0,1.0,0.5))
+					.parent(ids.tones_canvas)
+					.place_on_kid_area(true)
+					.top_left_with_margins_on(ids.tones_canvas,y,x)
+					.set(bar_id,ui);
 
-			//Bar note text widgets
-			if w >= 20.0 && h >= 10.0{
-				widget::Text::new(note_name(tone.note))
-					.parent(bar_id)
-					.graphics_for(bar_id)
-					.font_size((tone_widget_size[1]*0.75) as u32)
-					.color(color::BLACK)
-					.middle_of(bar_id)
-					.center_justify()
-					.set(text_id,ui);
+				//Bar note text widgets
+				if w >= 20.0 && h >= 10.0{
+					widget::Text::new(note_name(tone.note))
+						.parent(bar_id)
+						.graphics_for(bar_id)
+						.font_size((tone_widget_size[1]*0.75) as u32)
+						.color(color::BLACK)
+						.middle_of(bar_id)
+						.center_justify()
+						.set(text_id,ui);
+				}
 			}
 		}
 	}

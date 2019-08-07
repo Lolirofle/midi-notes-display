@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Lolirofle <lolipopple@hotmail.com>"]
 
 [dependencies]
-conrod      = {version = "0.56" , features = ["glium","winit"]}
-font-loader = {version = "0.4"}
-nom-midi    = {version = "0.2"}
-rusttype    = {version = "0.2"}
+conrod      = {version = "0.61" , features = ["glium","winit"]}
+font-loader = {version = "0.8"}
+nom-midi    = {version = "0.5"}
+rusttype    = {version = "0.5.2"}
